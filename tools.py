@@ -1,4 +1,4 @@
-"""Assignment tool functions: weather (live API), math (deterministic), FX (static)."""
+"""Assignment tool functions: weather (live API), math (deterministic), FX (live Frankfurter API)."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import requests
 
 _GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 _FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+_FRANKFURTER_LATEST = "https://api.frankfurter.app/latest"
 
 # WMO-ish descriptions in Hebrew for current weather_code from Open-Meteo
 _WMO_HE: dict[int, str] = {
@@ -86,31 +87,78 @@ def calculateMath(expression: str) -> str:
     return f"{value:.6g}"
 
 
-_STATIC_RATES_TO_ILS = {
-    "USD": 3.75,
-    "EUR": 4.05,
-    "GBP": 4.80,
-    "JPY": 0.025,
-    "CAD": 2.75,
-    "CHF": 4.20,
+_FX_ALIASES: dict[str, str] = {
+    "DOLLAR": "USD",
+    "דולר": "USD",
+    "EURO": "EUR",
+    "יורו": "EUR",
+    "POUND": "GBP",
+    "FUNT": "GBP",
+    "ליש": "GBP",
 }
+_FX_SNIFF_ORDER = ("USD", "EUR", "GBP", "JPY", "CAD", "CHF", "AUD", "CNY")
+
+
+def _normalize_fx_code(currencyCode: str) -> str:
+    raw = (currencyCode or "").strip()
+    if not raw:
+        return ""
+    if raw in _FX_ALIASES:
+        return _FX_ALIASES[raw]
+    upper = raw.upper()
+    if upper in _FX_ALIASES:
+        return _FX_ALIASES[upper]
+    if len(upper) == 3 and upper.isalpha():
+        return upper
+    for iso in _FX_SNIFF_ORDER:
+        if iso in upper:
+            return iso
+    return upper[:3].upper() if len(upper) >= 3 else upper
 
 
 def getExchangeRate(currencyCode: str) -> str:
-    """Static representative rate → ILS (assignment allows dictionary)."""
-    code = (currencyCode or "").strip().upper()
-    aliases = {"DOLLAR": "USD", "דולר": "USD", "EURO": "EUR", "יורו": "EUR"}
-    if code in aliases:
-        code = aliases[code]
-    if len(code) != 3 and code not in _STATIC_RATES_TO_ILS:
-        for k in _STATIC_RATES_TO_ILS:
-            if k in code.upper():
-                code = k
-                break
-    rate = _STATIC_RATES_TO_ILS.get(code)
-    if rate is None:
-        return f"אין נתון סטטי לקוד המטבע {currencyCode!r}. נתמוך ב: {', '.join(sorted(_STATIC_RATES_TO_ILS))}."
-    return f"שער ה{code} היציג הוא {rate} ש״ח (נתון לדוגמה סטטי להגשה)."
+    """Live rate: units of ILS per 1 unit of foreign currency (Frankfurter, no API key)."""
+    raw_in = (currencyCode or "").strip()
+    if "שקל" in raw_in or "ש״ח" in raw_in:
+        return "המטבע המקומי הוא השקל; בחרו מטבע זר להמרה (למשל USD, EUR)."
+
+    code = _normalize_fx_code(raw_in)
+    if not code or len(code) != 3 or not code.isalpha():
+        return (
+            f"לא זוהה קוד מטבע תקף ב-{currencyCode!r}. "
+            "נסו קוד ISO בן שלוש אותיות, למשל USD, EUR, GBP."
+        )
+
+    if code == "ILS":
+        return "המטבע המקומי הוא השקל; בחרו מטבע זר להמרה (למשל USD, EUR)."
+
+    try:
+        r = requests.get(
+            _FRANKFURTER_LATEST,
+            params={"from": code, "to": "ILS"},
+            timeout=12,
+        )
+        r.raise_for_status()
+        data = r.json()
+    except requests.RequestException:
+        return (
+            "לא ניתן להשיג שער מזמן שירות המטבעות. נסו שוב מאוחר יותר "
+            "(USD, EUR, GBP)."
+        )
+
+    rates = data.get("rates") if isinstance(data, dict) else None
+    ils_rate = rates.get("ILS") if isinstance(rates, dict) else None
+    if ils_rate is None:
+        return (
+            f"המטבע {code} לא נתמך או אין נתון להמרה ל-ILS. "
+            "נסו למשל USD, EUR, GBP, JPY."
+        )
+
+    as_of = data.get("date", "?")
+    return (
+        f"שער {code} (חי, Frankfurter): 1 {code} = {ils_rate:g} ש״ח "
+        f"(נכון לתאריך {as_of})."
+    )
 
 
 def getWeather(city: str) -> str:

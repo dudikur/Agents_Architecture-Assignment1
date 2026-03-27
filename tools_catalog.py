@@ -52,7 +52,10 @@ CALCULATE_MATH_JSON: dict[str, Any] = {
 
 GET_EXCHANGE_RATE_JSON: dict[str, Any] = {
     "name": "getExchangeRate",
-    "description": "Representative static FX rate to ILS (שקלים). Use for דולר, יורו, שער, המרה.",
+    "description": (
+        "Live FX rate vs ILS via Frankfurter (public API, no key; daily central-bank-style data). "
+        "Use for דולר, יורו, שער, המרה."
+    ),
     "parameters": {
         "type": "object",
         "properties": {
